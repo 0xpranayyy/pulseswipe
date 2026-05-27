@@ -2,16 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { useAccount } from 'wagmi'
-import { useConnectModal } from '@rainbow-me/rainbowkit'
+import { useWallet } from '@/hooks/use-wallet'
+
 import { Bookmark, Trash2, Wallet, TrendingUp, TrendingDown } from 'lucide-react'
 import Link from 'next/link'
 import { getWatchlist, removeFromWatchlist } from '@/lib/supabase'
 import { useToast } from '@/components/toast'
 
 export default function WatchlistPage() {
-  const { address, isConnected } = useAccount()
-  const { openConnectModal } = useConnectModal()
+  const { address, isConnected, connect, disconnect } = useWallet()
+  
   const { toast } = useToast()
   const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -34,7 +34,7 @@ export default function WatchlistPage() {
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-center">
           <Wallet size={28} className="text-white/15 mx-auto mb-4" />
           <p className="text-white/40 text-sm mb-4">Connect wallet to see your watchlist</p>
-          <motion.button whileTap={{ scale: 0.96 }} onClick={openConnectModal}
+          <motion.button whileTap={{ scale: 0.96 }} onClick={connect}
             className="px-5 py-2.5 bg-white text-black rounded-xl text-[11px] font-bold uppercase tracking-widest">
             Connect
           </motion.button>

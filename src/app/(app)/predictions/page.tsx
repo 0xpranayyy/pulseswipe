@@ -2,16 +2,16 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useAccount } from 'wagmi'
-import { useConnectModal } from '@rainbow-me/rainbowkit'
+import { useWallet } from '@/hooks/use-wallet'
+
 import { RefreshCw, Wallet, ExternalLink, CheckCircle2, X } from 'lucide-react'
 import { useToast } from '@/components/toast'
 
 type Tab = 'positions' | 'history' | 'closed'
 
 export default function PortfolioPage() {
-  const { address, isConnected } = useAccount()
-  const { openConnectModal } = useConnectModal()
+  const { address, isConnected, connect, disconnect } = useWallet()
+  
 
   const [tab, setTab] = useState<Tab>('positions')
   const [profile, setProfile] = useState<{ proxyWallet: string | null; hasAccount: boolean; name?: string } | null>(null)
@@ -63,7 +63,7 @@ export default function PortfolioPage() {
           <p className="text-sm text-white/30 mb-5 leading-relaxed max-w-[260px] mx-auto">
             See your positions, trades, and portfolio
           </p>
-          <motion.button whileTap={{ scale: 0.96 }} onClick={openConnectModal}
+          <motion.button whileTap={{ scale: 0.96 }} onClick={connect}
             className="px-6 py-2.5 bg-white text-black rounded-full text-sm font-semibold">
             Connect Wallet
           </motion.button>
@@ -86,17 +86,17 @@ export default function PortfolioPage() {
             <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-gradient-to-br from-violet-500/15 to-rose-500/15 border border-white/[0.08] flex items-center justify-center">
               <span className="text-2xl">🎯</span>
             </div>
-            <h2 className="text-base font-semibold text-white mb-2">Set up to start trading</h2>
+            <h2 className="text-base font-semibold text-white mb-2">Connect your Polymarket wallet</h2>
             <p className="text-sm text-white/40 mb-6 leading-relaxed">
-              Quick one-time setup. Add some funds and you&apos;re ready to swipe and trade.
+              To see your positions and trade, connect the same wallet you use on Polymarket. If you signed up with Google/email on Polymarket, connect the external wallet linked to that account.
             </p>
             <a href="https://polymarket.com" target="_blank" rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-6 py-2.5 bg-white text-black rounded-full text-sm font-semibold">
-              Get started
+              Open Polymarket
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
             <button onClick={refresh} className="block mx-auto mt-4 text-[11px] text-white/30 hover:text-white/60">
-              I&apos;ve set up my account → Refresh
+              I&apos;ve connected the right wallet → Refresh
             </button>
           </motion.div>
         </div>
@@ -202,10 +202,22 @@ function PositionsList({ positions }: { positions: any[] }) {
                 </div>
               </div>
               {/* Sell button */}
-              <button onClick={() => setSellTarget(p)}
-                className="w-full mt-2.5 py-2 rounded-xl border border-white/[0.08] text-[11px] font-medium text-white/50 hover:bg-white/[0.04] hover:text-white/80 active:scale-[0.98] transition-all">
-                Sell
-              </button>
+              {p.redeemable ? (
+                <a href={`https://polymarket.com/portfolio`} target="_blank" rel="noopener noreferrer"
+                  className="w-full mt-2.5 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 text-[11px] font-medium text-emerald-400 text-center hover:bg-emerald-500/10 active:scale-[0.98] transition-all">
+                  Redeem winnings
+                </a>
+              ) : p.mergeable ? (
+                <a href={`https://polymarket.com/portfolio`} target="_blank" rel="noopener noreferrer"
+                  className="w-full mt-2.5 py-2 rounded-xl border border-white/[0.08] text-[11px] font-medium text-white/50 text-center hover:bg-white/[0.04] active:scale-[0.98] transition-all">
+                  Close position
+                </a>
+              ) : (
+                <button onClick={() => setSellTarget(p)}
+                  className="w-full mt-2.5 py-2 rounded-xl border border-white/[0.08] text-[11px] font-medium text-white/50 hover:bg-white/[0.04] hover:text-white/80 active:scale-[0.98] transition-all">
+                  Sell
+                </button>
+              )}
             </motion.div>
           )
         })}
@@ -246,10 +258,10 @@ function SellModal({ position, onClose }: { position: any; onClose: () => void }
 
     try {
       const { sell } = await import('@/lib/trade-executor')
-      const { getWalletClient } = await import('wagmi/actions')
-      const { config } = await import('@/lib/wagmi-config')
+      const { getWalletClientFromPrivy } = await import('@/lib/get-wallet-client')
+      
 
-      const walletClient = await getWalletClient(config)
+      const walletClient = await getWalletClientFromPrivy(null)
       if (!walletClient) throw new Error('Wallet not connected')
 
       setStatus('submitting')

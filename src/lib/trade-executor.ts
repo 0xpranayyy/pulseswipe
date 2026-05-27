@@ -33,35 +33,44 @@ async function getClient(walletClient: WalletClient): Promise<{ client: ClobClie
   const eoa = walletClient.account?.address
   if (!eoa) throw new Error('Wallet not connected')
 
-  // Always clear cache if address changed
-  if (cachedClient && cachedClient.address !== eoa) {
-    cachedClient = null
+  if (cachedClient && cachedClient.address !== eoa) cachedClient = null
+  if (cachedClient) return { client: cachedClient.client, proxyWallet: cachedClient.proxyWallet }
+
+  // Try to find proxy/deposit wallet from Polymarket profile
+  let funderAddress = await lookupProxyWallet(eoa)
+
+  // If no proxy wallet found, use the EOA itself as funder
+  // This works for users who trade directly from their EOA
+  if (!funderAddress) {
+    funderAddress = eoa
   }
 
-  if (cachedClient) {
-    return { client: cachedClient.client, proxyWallet: cachedClient.proxyWallet }
+  // Try cached API creds from localStorage
+  let creds: any = null
+  const cacheKey = `pulse_creds_${eoa.toLowerCase()}`
+  try {
+    const stored = typeof window !== 'undefined' ? localStorage.getItem(cacheKey) : null
+    if (stored) creds = JSON.parse(stored)
+  } catch {}
+
+  if (!creds) {
+    const temp = new ClobClient({ host: CLOB_HOST, chain: CHAIN_ID, signer: walletClient })
+    creds = await temp.createOrDeriveApiKey()
+    try { localStorage.setItem(cacheKey, JSON.stringify(creds)) } catch {}
   }
 
-  // Find proxy/deposit wallet
-  const proxyWallet = await lookupProxyWallet(eoa)
-  if (!proxyWallet) throw new Error('NO_ACCOUNT')
-
-  // Derive API creds — the signer MUST match the address that owns the API key
-  const temp = new ClobClient({ host: CLOB_HOST, chain: CHAIN_ID, signer: walletClient })
-  const creds = await temp.createOrDeriveApiKey()
-
-  // Use POLY_1271 with deposit wallet as funder
+  // Try POLY_1271 first (deposit wallet), fall back to EOA if it fails
   const client = new ClobClient({
     host: CLOB_HOST,
     chain: CHAIN_ID,
     signer: walletClient,
     creds,
-    signatureType: SignatureTypeV2.POLY_1271,
-    funderAddress: proxyWallet,
+    signatureType: funderAddress === eoa ? SignatureTypeV2.EOA : SignatureTypeV2.POLY_1271,
+    funderAddress,
   })
 
-  cachedClient = { address: eoa, client, proxyWallet }
-  return { client, proxyWallet }
+  cachedClient = { address: eoa, client, proxyWallet: funderAddress }
+  return { client, proxyWallet: funderAddress }
 }
 
 export interface TradeResult {
@@ -129,6 +138,7 @@ export async function buy(walletClient: WalletClient, tokenId: string, amount: n
     const msg = String(e?.message || '')
     if (msg.includes('signer') || msg.includes('API KEY') || msg.includes('L2')) {
       cachedClient = null
+      try { const k = `pulse_creds_${(walletClient.account?.address || '').toLowerCase()}`; localStorage.removeItem(k) } catch {}
       return { success: false, error: 'Session expired — try again' }
     }
     return { success: false, error: friendlyError(e) }
@@ -179,13 +189,22 @@ export async function sell(walletClient: WalletClient, tokenId: string, shares: 
 
 function friendlyError(e: any): string {
   const m = String(e?.message || e || '').toLowerCase()
-  if (m.includes('no_account')) return 'Set up your account on Polymarket first'
-  if (m.includes('balance') || m.includes('not enough')) return 'Not enough balance'
-  if (m.includes('allowance')) return 'Approve spending on Polymarket first'
-  if (m.includes('rejected') || m.includes('denied')) return 'You cancelled'
+  const raw = String(e?.message || e || '')
+  if (m.includes('no_account')) return 'Connect the wallet you use on Polymarket'
+  if (m.includes('balance') || m.includes('not enough')) return 'Not enough balance — deposit on Polymarket first'
+  if (m.includes('allowance')) return 'Approve token spending on Polymarket first'
+  if (m.includes('maker address not allowed') || m.includes('deposit wallet')) return 'Connect the wallet linked to your Polymarket account'
+  if (m.includes('rejected') || m.includes('denied')) return 'You cancelled the signature'
   if (m.includes('geoblock') || m.includes('cloudflare') || m.includes('region')) return 'Not available in your region'
-  if (m.includes('network') || m.includes('fetch')) return 'Connection error — try again'
-  return 'Something went wrong — try again'
+  if (m.includes('network') || m.includes('fetch') || m.includes('failed to fetch')) return 'Connection error — check internet and try again'
+  if (m.includes('signer') || m.includes('api key') || m.includes('l2')) return 'Session expired — try again'
+  if (m.includes('no orderbook') || m.includes('no match')) return 'No liquidity — try a smaller amount or different market'
+  if (m.includes('minimum') || m.includes('min order')) return 'Amount too small — try a larger amount'
+  if (m.includes('price') || m.includes('invalid price')) return 'Price out of range — try again'
+  // Show the actual error so user isn't clueless
+  if (raw.length > 0 && raw.length < 120) return raw
+  if (raw.length >= 120) return raw.slice(0, 100) + '...'
+  return 'Unknown error — try again'
 }
 
 export function clearCache() { cachedClient = null }

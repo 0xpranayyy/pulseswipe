@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { ArrowLeft, TrendingUp, TrendingDown, Clock, BarChart3, ExternalLink, Users } from 'lucide-react'
-import { useAccount } from 'wagmi'
-import { useConnectModal } from '@rainbow-me/rainbowkit'
+import { useWallet } from '@/hooks/use-wallet'
+
 import { useRouter } from 'next/navigation'
 import { formatNumber, timeRemaining } from '@/lib/utils'
 import { useToast } from '@/components/toast'
@@ -19,8 +19,8 @@ export default function MarketPage({ params }: { params: Promise<{ slug: string 
   const [side, setSide] = useState<'YES' | 'NO'>('YES')
   const [amount, setAmount] = useState(10)
   const [buying, setBuying] = useState(false)
-  const { isConnected } = useAccount()
-  const { openConnectModal } = useConnectModal()
+  const { isConnected, connect } = useWallet()
+  
   const { toast, update } = useToast()
   const router = useRouter()
 
@@ -129,7 +129,7 @@ export default function MarketPage({ params }: { params: Promise<{ slug: string 
   }, [slug])
 
   const handleBuy = async () => {
-    if (!isConnected) { openConnectModal?.(); return }
+    if (!isConnected) { connect(); return }
     if (!market) return
     setBuying(true)
     const tokenId = side === 'YES' ? market.clobTokenIds[0] : market.clobTokenIds[1]
@@ -138,9 +138,9 @@ export default function MarketPage({ params }: { params: Promise<{ slug: string 
     const pid = toast({ type: 'pending', title: 'Sign in wallet', duration: 0 })
     try {
       const { buy } = await import('@/lib/trade-executor')
-      const { getWalletClient } = await import('wagmi/actions')
-      const { config } = await import('@/lib/wagmi-config')
-      const wc = await getWalletClient(config)
+      const { getWalletClientFromPrivy } = await import('@/lib/get-wallet-client')
+      
+      const wc = await getWalletClientFromPrivy(null)
       if (!wc) throw new Error('Wallet disconnected')
       update(pid, { title: 'Placing order...' })
       const result = await buy(wc, tokenId, amount, market.negRisk)
