@@ -278,6 +278,7 @@ function SwipeCard({ market, onBuy, onSkip, onBookmark }: { market: AppMarket; o
 // BUY MODAL
 // ============================================================
 function BuyModal({ market, onComplete, onCancel }: { market: AppMarket; onComplete: () => void; onCancel: () => void }) {
+  const { address } = useWallet()
   const [amount, setAmount] = useState(10)
   const [side, setSide] = useState<'YES' | 'NO'>('YES')
   const [status, setStatus] = useState<'input' | 'signing' | 'submitting' | 'success' | 'error'>('input')
@@ -359,10 +360,39 @@ function BuyModal({ market, onComplete, onCancel }: { market: AppMarket; onCompl
             </div>
           )}
 
-          <button onClick={handleSubmit} disabled={status !== 'input' || amount <= 0}
-            className="w-full py-4 rounded-2xl bg-brand text-white text-sm font-bold font-[family-name:var(--font-display)] uppercase tracking-wider disabled:opacity-40 glow-red active:scale-[0.98] transition-transform">
-            {status === 'signing' ? 'Sign in wallet...' : status === 'submitting' ? 'Placing...' : status === 'success' ? '✓ Done' : `Buy ${side} — $${amount}`}
-          </button>
+          {status === 'success' ? (
+            <div className="space-y-3">
+              <div className="text-center py-2">
+                <p className="text-emerald-400 font-bold text-sm">✓ Trade placed!</p>
+              </div>
+              <button onClick={async () => {
+                const cardUrl = `/api/share-card?question=${encodeURIComponent(market.question)}&outcome=${side}&entry=${Math.round(price * 100)}&current=${Math.round(market.probability)}&profit=${encodeURIComponent(`+$${(shares - amount).toFixed(2)}`)}&shares=${shares.toFixed(1)}&position=${encodeURIComponent(`$${amount}`)}&username=${address?.slice(0, 6) || 'anon'}`
+                try {
+                  const res = await fetch(cardUrl)
+                  const blob = await res.blob()
+                  const file = new File([blob], 'pulse-trade.png', { type: 'image/png' })
+                  if (navigator.share && navigator.canShare({ files: [file] })) {
+                    await navigator.share({ files: [file], title: `${side} on: ${market.question}`, text: `I just bought ${side} at ${Math.round(price * 100)}¢ on Pulse\npulseswipe.online` })
+                  } else {
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = url; a.download = 'pulse-trade.png'; a.click()
+                    URL.revokeObjectURL(url)
+                  }
+                } catch {}
+              }} className="w-full py-4 rounded-2xl border-2 border-brand/30 bg-brand/5 text-brand text-sm font-bold font-[family-name:var(--font-display)] uppercase tracking-wider active:scale-[0.98] transition-transform">
+                Share Trade Card
+              </button>
+              <button onClick={onComplete} className="w-full py-3 text-white/30 text-xs font-medium">
+                Close
+              </button>
+            </div>
+          ) : (
+            <button onClick={handleSubmit} disabled={status !== 'input' || amount <= 0}
+              className="w-full py-4 rounded-2xl bg-brand text-white text-sm font-bold font-[family-name:var(--font-display)] uppercase tracking-wider disabled:opacity-40 glow-red active:scale-[0.98] transition-transform">
+              {status === 'signing' ? 'Sign in wallet...' : status === 'submitting' ? 'Placing...' : `Buy ${side} — $${amount}`}
+            </button>
+          )}
         </div>
       </motion.div>
     </>
