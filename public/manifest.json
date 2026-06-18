@@ -1,11 +1,11 @@
 {
   "name": "Pulse",
   "short_name": "Pulse",
-  "description": "Swipe to predict",
+  "description": "Swipe. Predict. Profit.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#000000",
+  "background_color": "#0b000c",
+  "theme_color": "#f72035",
   "orientation": "portrait",
   "icons": [
     {
