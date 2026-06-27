@@ -8,6 +8,7 @@ import { deployDepositWallet, getWalletNonce, executeWalletBatch, isRelayerConfi
  * - deploy: Deploy a deposit wallet for the user (gasless)
  * - nonce: Get current wallet nonce for batch signing
  * - execute: Submit a signed wallet batch (approvals, etc.)
+ * - status: Check if user has a deposit wallet
  */
 export async function POST(request: NextRequest) {
   if (!isRelayerConfigured()) {
@@ -39,8 +40,31 @@ export async function POST(request: NextRequest) {
         return Response.json({ success: true, ...result })
       }
 
+      case 'status': {
+        const { ownerAddress } = body
+        if (!ownerAddress) return Response.json({ error: 'ownerAddress required' }, { status: 400 })
+        
+        // Check Polymarket profile for deposit wallet
+        try {
+          const res = await fetch(
+            `https://gamma-api.polymarket.com/public-profile?address=${ownerAddress}`,
+            { cache: 'no-store' }
+          )
+          if (res.ok) {
+            const profile = await res.json()
+            return Response.json({
+              hasWallet: !!profile.proxyWallet,
+              depositWallet: profile.proxyWallet || null,
+              hasAccount: !!profile.proxyWallet,
+            })
+          }
+        } catch {}
+        
+        return Response.json({ hasWallet: false, depositWallet: null, hasAccount: false })
+      }
+
       default:
-        return Response.json({ error: 'Unknown action. Use: deploy, nonce, execute' }, { status: 400 })
+        return Response.json({ error: 'Unknown action. Use: deploy, nonce, execute, status' }, { status: 400 })
     }
   } catch (error: any) {
     return Response.json({ success: false, error: error.message }, { status: 500 })

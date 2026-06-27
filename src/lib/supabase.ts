@@ -50,16 +50,6 @@ export async function removeFromWatchlist(walletAddress: string, marketId: strin
   return !error
 }
 
-export async function isWatchlisted(walletAddress: string, marketId: string): Promise<boolean> {
-  const { data } = await supabase
-    .from('watchlist')
-    .select('id')
-    .eq('wallet', walletAddress.toLowerCase())
-    .eq('market_id', marketId)
-    .limit(1)
-  return (data?.length || 0) > 0
-}
-
 // ============================================================
 // ACTIVITY LOG
 // ============================================================
@@ -95,26 +85,4 @@ export async function getActivity(walletAddress: string, limit = 50) {
   return data || []
 }
 
-// ============================================================
-// USER PREFERENCES (recommendation sync)
-// ============================================================
 
-export async function savePreferences(walletAddress: string, prefs: object) {
-  const { error } = await supabase.from('preferences').upsert({
-    wallet: walletAddress.toLowerCase(),
-    data: prefs,
-    updated_at: new Date().toISOString(),
-  }, { onConflict: 'wallet' })
-  if (error) console.error('savePreferences:', error)
-}
-
-export async function getPreferences(walletAddress: string) {
-  const { data, error } = await supabase
-    .from('preferences')
-    .select('data')
-    .eq('wallet', walletAddress.toLowerCase())
-    .limit(1)
-    .single()
-  if (error) return null
-  return data?.data || null
-}

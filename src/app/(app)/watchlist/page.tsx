@@ -3,15 +3,13 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useWallet } from '@/hooks/use-wallet'
-
-import { Bookmark, Trash2, Wallet, TrendingUp, TrendingDown } from 'lucide-react'
+import { Bookmark, Trash2, Wallet, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { getWatchlist, removeFromWatchlist } from '@/lib/supabase'
 import { useToast } from '@/components/toast'
 
 export default function WatchlistPage() {
-  const { address, isConnected, connect, disconnect } = useWallet()
-  
+  const { address, isConnected, connect } = useWallet()
   const { toast } = useToast()
   const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -30,12 +28,12 @@ export default function WatchlistPage() {
 
   if (!isConnected) {
     return (
-      <div className="flex-1 flex items-center justify-center px-8">
+      <div className="flex-1 flex items-center justify-center px-8 bg-bg-primary min-h-dvh">
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-center">
-          <Wallet size={28} className="text-white/15 mx-auto mb-4" />
-          <p className="text-white/40 text-sm mb-4">Connect wallet to see your watchlist</p>
+          <Wallet size={32} strokeWidth={1.5} className="text-text-tertiary mx-auto mb-4" />
+          <p className="text-text-secondary font-medium mb-6">Connect wallet to see your saved markets</p>
           <motion.button whileTap={{ scale: 0.96 }} onClick={connect}
-            className="px-5 py-2.5 bg-white text-black rounded-xl text-[11px] font-bold uppercase tracking-widest">
+            className="px-6 py-3 bg-brand text-black rounded-[20px] text-[13px] font-bold uppercase tracking-widest shadow-lg">
             Connect
           </motion.button>
         </motion.div>
@@ -44,52 +42,65 @@ export default function WatchlistPage() {
   }
 
   return (
-    <motion.div initial={{ opacity: 0, y: 20, filter: 'blur(10px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-      transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }} className="flex flex-col min-h-full pt-4 px-5 pb-24">
-
-      <div className="flex items-center gap-2 mb-5">
-        <Bookmark size={18} className="text-brand" />
-        <h1 className="text-xl font-bold font-[family-name:var(--font-display)] tracking-tight">Watchlist</h1>
-        <span className="text-[10px] text-white/30 font-bold ml-auto">{items.length} saved</span>
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="w-5 h-5 border-2 border-white/10 border-t-white/50 rounded-full animate-spin" />
+    <div className="flex flex-col min-h-dvh bg-bg-primary pt-safe-top pb-24 overflow-x-hidden">
+      <header className="px-5 pt-4 pb-4 sticky top-0 z-40 liquid-glass rounded-b-[24px] shadow-sm mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bookmark size={20} className="text-brand" fill="currentColor" />
+          <h1 className="text-2xl font-bold font-display text-text-primary tracking-tight">Watchlist</h1>
         </div>
-      ) : items.length === 0 ? (
-        <div className="text-center py-16">
-          <Bookmark size={32} className="text-white/10 mx-auto mb-3" />
-          <p className="text-white/40 text-sm mb-1">No saved markets</p>
-          <p className="text-white/20 text-xs">Tap the bookmark icon on any card to save it here</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {items.map((item, i) => (
-            <motion.div key={item.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
-              className="flex items-center gap-3 glass-dark premium-border rounded-2xl p-3.5">
-              <Link href={`/market/${item.slug}`} className="flex items-center gap-3 flex-1 min-w-0">
-                {item.image ? (
-                  <img src={item.image} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0 opacity-80" />
-                ) : (
-                  <div className="w-10 h-10 rounded-xl bg-white/[0.03] flex items-center justify-center flex-shrink-0"><span>📊</span></div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-[12px] font-semibold text-white/85 line-clamp-1">{item.question}</p>
-                  <div className="flex items-center gap-2 mt-1 text-[10px] text-white/30">
-                    <span className="font-bold uppercase">{item.category}</span>
-                    <span>Saved at {Math.round(item.probability_at_save)}¢</span>
-                  </div>
-                </div>
-              </Link>
-              <button onClick={() => handleRemove(item.market_id)}
-                className="w-9 h-9 rounded-xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center flex-shrink-0 hover:bg-rose-500/10 hover:border-rose-500/20 transition-all active:scale-90">
-                <Trash2 size={14} className="text-white/30" />
-              </button>
+        <span className="text-[11px] text-text-tertiary font-bold uppercase tracking-wider">{items.length} saved</span>
+      </header>
+
+      <div className="flex-1 px-5 pt-2">
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+              <div className="w-5 h-5 border-2 border-brand/20 border-t-brand rounded-full" />
             </motion.div>
-          ))}
-        </div>
-      )}
-    </motion.div>
+          </div>
+        ) : items.length === 0 ? (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-center py-20">
+            <Bookmark size={36} strokeWidth={1.5} className="text-text-tertiary mx-auto mb-4" />
+            <p className="text-lg font-bold font-display text-text-primary mb-1">No saved markets</p>
+            <p className="text-text-tertiary text-sm">Tap the bookmark icon on any market to save it here</p>
+          </motion.div>
+        ) : (
+          <div className="space-y-3">
+            {items.map((item, i) => (
+              <motion.div key={item.id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
+                className="flex items-center gap-4 bg-surface-elevated rounded-[24px] p-4 border border-transparent shadow-sm group">
+                <Link href={`/market/${item.slug}`} className="flex items-center gap-4 flex-1 min-w-0">
+                  {item.image ? (
+                    <div className="w-12 h-12 rounded-[14px] overflow-hidden flex-shrink-0 bg-surface">
+                      <img src={item.image} alt="" className="w-full h-full object-cover opacity-90" />
+                    </div>
+                  ) : (
+                    <div className="w-12 h-12 rounded-[14px] bg-surface flex items-center justify-center flex-shrink-0 border border-white/[0.04]">
+                      <span className="text-lg">📊</span>
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[14px] font-semibold text-text-primary line-clamp-2 leading-snug">{item.question}</p>
+                    <div className="flex items-center gap-2 mt-2">
+                      <span className="text-[11px] font-bold text-text-secondary uppercase tracking-wider bg-white/5 px-2 py-0.5 rounded-md">{item.category || 'OTHER'}</span>
+                      <span className="text-[11px] text-text-tertiary font-medium">Saved at {Math.round(item.probability_at_save)}¢</span>
+                    </div>
+                  </div>
+                </Link>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button onClick={() => handleRemove(item.market_id)}
+                    className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-negative/10 transition-colors active:scale-95 group/btn">
+                    <Trash2 size={16} className="text-text-secondary group-hover/btn:text-negative transition-colors" />
+                  </button>
+                  <Link href={`/market/${item.slug}`} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-brand transition-colors group/link">
+                    <ChevronRight size={16} className="text-text-secondary group-hover/link:text-black" />
+                  </Link>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }

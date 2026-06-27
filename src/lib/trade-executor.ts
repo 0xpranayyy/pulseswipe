@@ -1,14 +1,20 @@
 /**
- * Trade Executor
+ * Trade Executor (V2)
  * 
- * Uses @polymarket/clob-client-v2 to place orders directly.
+ * Uses @polymarket/clob-client-v2 to place orders on Polymarket.
  * The SDK accepts viem WalletClient natively.
  * 
  * Flow:
  * 1. User connects wallet (wagmi → WalletClient)
- * 2. We look up their Polymarket proxy wallet
- * 3. Derive API creds (one-time)
- * 4. Place market order with builder code
+ * 2. Check onboarding status (deposit wallet, API creds, approvals)
+ * 3. If not onboarded → run enableTrading() flow
+ * 4. Place order with builder attribution
+ * 
+ * V2 Changes (April 28, 2026):
+ * - Collateral: pUSD (not USDC.e)
+ * - Builder code in order struct (bytes32)
+ * - New exchange contracts
+ * - SDK handles V2 order signing automatically
  */
 
 import { ClobClient, SignatureTypeV2, Side, OrderType } from '@polymarket/clob-client-v2'
@@ -39,10 +45,9 @@ async function getClient(walletClient: WalletClient): Promise<{ client: ClobClie
   // Try to find proxy/deposit wallet from Polymarket profile
   let funderAddress = await lookupProxyWallet(eoa)
 
-  // If no proxy wallet found, use the EOA itself as funder
-  // This works for users who trade directly from their EOA
+  // If no proxy wallet found, the user needs onboarding
   if (!funderAddress) {
-    funderAddress = eoa
+    throw new Error('NEEDS_ONBOARDING')
   }
 
   // Try cached API creds from localStorage
@@ -59,13 +64,12 @@ async function getClient(walletClient: WalletClient): Promise<{ client: ClobClie
     try { localStorage.setItem(cacheKey, JSON.stringify(creds)) } catch {}
   }
 
-  // Try POLY_1271 first (deposit wallet), fall back to EOA if it fails
   const client = new ClobClient({
     host: CLOB_HOST,
     chain: CHAIN_ID,
     signer: walletClient,
     creds,
-    signatureType: funderAddress === eoa ? SignatureTypeV2.EOA : SignatureTypeV2.POLY_1271,
+    signatureType: SignatureTypeV2.POLY_1271,
     funderAddress,
   })
 
@@ -80,21 +84,25 @@ export interface TradeResult {
 }
 
 /**
- * Buy shares at market price. Instant fill (FOK).
+ * Buy shares at market price.
  * amount = how much pUSD to spend
+ * 
+ * If the user hasn't onboarded yet, throws NEEDS_ONBOARDING.
+ * The caller should catch this and run enableTrading() from onboarding.ts.
  */
 export async function buy(walletClient: WalletClient, tokenId: string, amount: number, negRisk = false): Promise<TradeResult> {
+  // Mock markets can't be traded on the real CLOB
+  if (tokenId.startsWith('mock-')) {
+    return { success: false, error: 'This is a simulated market — real trading not available yet' }
+  }
   try {
     const { client } = await getClient(walletClient)
 
-    // Use GTC (Good Till Cancelled) limit order instead of FOK
-    // FOK gets killed if not instantly filled — GTC stays on the book
-    // First get the market price to set a reasonable limit
+    // Get market price for limit order
     let price: number
     try {
       price = await client.calculateMarketPrice(tokenId, Side.BUY, amount, OrderType.FOK)
     } catch {
-      // If can't calculate, use midpoint
       const mid = await client.getMidpoint(tokenId)
       price = mid?.mid ? parseFloat(mid.mid) : 0.5
     }
@@ -122,6 +130,9 @@ export async function buy(walletClient: WalletClient, tokenId: string, amount: n
         cachedClient = null
         return { success: false, error: 'Session expired — try again' }
       }
+      if (errStr.includes('allowance') || errStr.includes('balance')) {
+        return { success: false, error: 'NEEDS_APPROVALS' }
+      }
       return { success: false, error: errStr }
     }
 
@@ -136,6 +147,12 @@ export async function buy(walletClient: WalletClient, tokenId: string, amount: n
     }
   } catch (e: any) {
     const msg = String(e?.message || '')
+
+    // Trigger onboarding if user needs setup
+    if (msg === 'NEEDS_ONBOARDING') {
+      return { success: false, error: 'NEEDS_ONBOARDING' }
+    }
+
     if (msg.includes('signer') || msg.includes('API KEY') || msg.includes('L2')) {
       cachedClient = null
       try { const k = `pulse_creds_${(walletClient.account?.address || '').toLowerCase()}`; localStorage.removeItem(k) } catch {}
@@ -150,6 +167,10 @@ export async function buy(walletClient: WalletClient, tokenId: string, amount: n
  * amount = number of shares to sell
  */
 export async function sell(walletClient: WalletClient, tokenId: string, shares: number, negRisk = false): Promise<TradeResult> {
+  // Mock markets can't be traded on the real CLOB
+  if (tokenId.startsWith('mock-')) {
+    return { success: false, error: 'This is a simulated market — real trading not available yet' }
+  }
   try {
     const { client } = await getClient(walletClient)
 
@@ -178,11 +199,18 @@ export async function sell(walletClient: WalletClient, tokenId: string, shares: 
     )
 
     if (response?.error) {
-      return { success: false, error: String(response.error) }
+      const errStr = String(response.error)
+      if (errStr.includes('allowance') || errStr.includes('balance')) {
+        return { success: false, error: 'NEEDS_APPROVALS' }
+      }
+      return { success: false, error: errStr }
     }
 
     return { success: true, orderId: response?.orderID || 'placed' }
   } catch (e: any) {
+    if (e?.message === 'NEEDS_ONBOARDING') {
+      return { success: false, error: 'NEEDS_ONBOARDING' }
+    }
     return { success: false, error: friendlyError(e) }
   }
 }
@@ -190,10 +218,11 @@ export async function sell(walletClient: WalletClient, tokenId: string, shares: 
 function friendlyError(e: any): string {
   const m = String(e?.message || e || '').toLowerCase()
   const raw = String(e?.message || e || '')
-  if (m.includes('no_account')) return 'Connect the wallet you use on Polymarket'
-  if (m.includes('balance') || m.includes('not enough')) return 'Not enough balance — deposit on Polymarket first'
-  if (m.includes('allowance')) return 'Approve token spending on Polymarket first'
-  if (m.includes('maker address not allowed') || m.includes('deposit wallet')) return 'Connect the wallet linked to your Polymarket account'
+  if (m.includes('needs_onboarding')) return 'NEEDS_ONBOARDING'
+  if (m.includes('no_account')) return 'NEEDS_ONBOARDING'
+  if (m.includes('balance') || m.includes('not enough')) return 'Not enough pUSD balance — deposit on Polymarket first'
+  if (m.includes('allowance')) return 'NEEDS_APPROVALS'
+  if (m.includes('maker address not allowed') || m.includes('deposit wallet')) return 'NEEDS_ONBOARDING'
   if (m.includes('rejected') || m.includes('denied')) return 'You cancelled the signature'
   if (m.includes('geoblock') || m.includes('cloudflare') || m.includes('region')) return 'Not available in your region'
   if (m.includes('network') || m.includes('fetch') || m.includes('failed to fetch')) return 'Connection error — check internet and try again'
@@ -201,6 +230,7 @@ function friendlyError(e: any): string {
   if (m.includes('no orderbook') || m.includes('no match')) return 'No liquidity — try a smaller amount or different market'
   if (m.includes('minimum') || m.includes('min order')) return 'Amount too small — try a larger amount'
   if (m.includes('price') || m.includes('invalid price')) return 'Price out of range — try again'
+  if (m.includes('order_version_mismatch')) return 'Exchange version mismatch — please refresh and try again'
   // Show the actual error so user isn't clueless
   if (raw.length > 0 && raw.length < 120) return raw
   if (raw.length >= 120) return raw.slice(0, 100) + '...'
@@ -208,3 +238,7 @@ function friendlyError(e: any): string {
 }
 
 export function clearCache() { cachedClient = null }
+
+export async function getClobClient(walletClient: any) {
+  return getClient(walletClient)
+}

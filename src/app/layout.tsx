@@ -1,12 +1,10 @@
 import type { Metadata, Viewport } from 'next'
-import { Inter } from 'next/font/google'
+import { Analytics } from '@vercel/analytics/next'
 import { Providers } from '@/components/providers'
 import './globals.css'
 
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-})
+// Using system fonts as specified in the CSS variables
+// We'll leave Inter as a fallback variable if needed, but it's handled natively in globals.css
 
 export const metadata: Metadata = {
   title: 'Pulse',
@@ -44,10 +42,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
-      <body
-        className={`${inter.variable} font-sans antialiased bg-black text-white min-h-dvh overflow-x-hidden`}
-      >
+      <body className="font-sans antialiased bg-bg-primary text-text-primary min-h-dvh overflow-x-hidden selection:bg-brand selection:text-black">
         <Providers>{children}</Providers>
+        <Analytics />
       </body>
     </html>
   )

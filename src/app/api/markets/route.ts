@@ -1,13 +1,11 @@
 import { NextRequest } from 'next/server'
-import { fetchActiveEvents, fetchActiveMarkets, transformMarket, enrichWithHistory, AppMarket } from '@/lib/polymarket'
+import { fetchActiveEvents, transformMarket, enrichWithHistory, AppMarket } from '@/lib/polymarket'
 
 /**
  * GET /api/markets
  * 
- * Fetches real markets from Polymarket via the Events endpoint (for correct slugs)
- * and enriches with CLOB price history for sparklines.
- * 
- * Returns shuffled markets for the Tinder-style card feed.
+ * Fetches real markets from Polymarket via the Events endpoint.
+ * All data is live from Polymarket — no mock/simulated markets.
  */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -17,20 +15,22 @@ export async function GET(request: NextRequest) {
   const enrich = searchParams.get('enrich') === 'true'
 
   try {
-    // Fetch from events endpoint — gives us correct event slugs for URLs
-    const events = await fetchActiveEvents({ limit: 30, offset, order: 'volume_24hr' })
+    // Fetch more events to ensure we have enough after filtering
+    const fetchLimit = category === 'EXPIRING' ? 100 : 80
+    const events = await fetchActiveEvents({ limit: fetchLimit, offset, order: 'volume_24hr' })
 
-    // Transform: flatten events into individual markets, carrying the event slug
+    // Transform: flatten events into individual markets
     let markets: AppMarket[] = []
     const now = Date.now()
-    const oneDayAgo = now - (24 * 60 * 60 * 1000) // Only filter markets ended 24h+ ago
+    const oneDayAgo = now - (24 * 60 * 60 * 1000)
+
     for (const event of events) {
       if (!event.markets) continue
       for (const market of event.markets) {
         if (!market.acceptingOrders || !market.enableOrderBook) continue
         const transformed = transformMarket(market, event.slug)
-        // Skip extreme probability markets (basically resolved)
-        if (transformed.probability <= 2 || transformed.probability >= 98) continue
+        // Skip fully resolved markets (price at 0 or 100)
+        if (transformed.probability <= 1 || transformed.probability >= 99) continue
         // Skip markets that ended more than 24h ago
         if (transformed.endDate) {
           const end = new Date(transformed.endDate).getTime()
@@ -42,18 +42,39 @@ export async function GET(request: NextRequest) {
 
     // Category filter
     if (category && category !== 'ALL') {
-      markets = markets.filter((m) => m.category === category)
+      if (category === 'EXPIRING') {
+        const nowTime = Date.now()
+        let limitTime = nowTime + 48 * 60 * 60 * 1000
+        let filtered = markets.filter((m) => {
+          if (!m.endDate) return false
+          const end = new Date(m.endDate).getTime()
+          return !isNaN(end) && end > nowTime && end <= limitTime
+        })
+        // Expand to 7 days if too few results
+        if (filtered.length < 10) {
+          limitTime = nowTime + 7 * 24 * 60 * 60 * 1000
+          filtered = markets.filter((m) => {
+            if (!m.endDate) return false
+            const end = new Date(m.endDate).getTime()
+            return !isNaN(end) && end > nowTime && end <= limitTime
+          })
+        }
+        markets = filtered
+      } else {
+        markets = markets.filter((m) => m.category.toUpperCase() === category.toUpperCase())
+      }
     }
 
-    // Shuffle for random discovery
+    // Shuffle for discovery, then cap at limit
     markets = shuffleArray(markets).slice(0, limit)
 
-    // Enrich top markets with sparkline data from CLOB price history
-    if (enrich) {
+    // Enrich top markets with sparkline/trend data
+    if (enrich && markets.length > 0) {
+      const enrichCount = Math.min(6, markets.length)
       const enriched = await Promise.all(
-        markets.slice(0, 6).map(enrichWithHistory)
+        markets.slice(0, enrichCount).map(enrichWithHistory)
       )
-      markets = [...enriched, ...markets.slice(6)]
+      markets = [...enriched, ...markets.slice(enrichCount)]
     }
 
     return Response.json({

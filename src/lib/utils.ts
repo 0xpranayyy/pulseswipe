@@ -11,10 +11,6 @@ export function formatNumber(num: number): string {
   return num.toFixed(0)
 }
 
-export function formatPercentage(num: number): string {
-  return `${Math.round(num)}%`
-}
-
 export function timeRemaining(endDate: Date | string | null): string {
   if (!endDate) return 'Ongoing'
   const end = new Date(endDate)
@@ -29,15 +25,4 @@ export function timeRemaining(endDate: Date | string | null): string {
   if (days > 30) return `${Math.floor(days / 30)}mo`
   if (days > 0) return `${days}d ${hours}h`
   return `${hours}h`
-}
-
-export function generateSparkline(length: number = 12): number[] {
-  const data: number[] = []
-  let value = 50 + Math.random() * 30
-  for (let i = 0; i < length; i++) {
-    value += (Math.random() - 0.5) * 10
-    value = Math.max(5, Math.min(95, value))
-    data.push(value)
-  }
-  return data
 }

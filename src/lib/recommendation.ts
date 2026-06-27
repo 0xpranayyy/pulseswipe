@@ -149,17 +149,4 @@ export function rankMarkets<T extends { category: string; probability: number; v
   return [...markets].sort((a, b) => scoreMarket(b) - scoreMarket(a))
 }
 
-/**
- * Get user's top categories for display
- */
-export function getTopCategories(): Array<{ category: string; score: number }> {
-  const prefs = getPrefs()
-  return Object.entries(prefs.categories)
-    .map(([category, score]) => ({ category, score }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5)
-}
 
-export function getPreferences(): UserPreferences {
-  return getPrefs()
-}

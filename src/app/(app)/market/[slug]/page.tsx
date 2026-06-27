@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowLeft, TrendingUp, TrendingDown, Clock, BarChart3, ExternalLink, Users } from 'lucide-react'
+import { ArrowLeft, TrendingUp, TrendingDown, ExternalLink } from 'lucide-react'
 import { useWallet } from '@/hooks/use-wallet'
-
 import { useRouter } from 'next/navigation'
 import { formatNumber, timeRemaining } from '@/lib/utils'
 import { useToast } from '@/components/toast'
@@ -19,7 +18,7 @@ export default function MarketPage({ params }: { params: Promise<{ slug: string 
   const [side, setSide] = useState<'YES' | 'NO'>('YES')
   const [amount, setAmount] = useState(10)
   const [buying, setBuying] = useState(false)
-  const { isConnected, connect } = useWallet()
+  const { address, isConnected, connect } = useWallet()
   
   const { toast, update } = useToast()
   const router = useRouter()
@@ -33,7 +32,7 @@ export default function MarketPage({ params }: { params: Promise<{ slug: string 
     async function load() {
       setLoading(true)
       try {
-        let matching: AppMarket[] = []
+        const matching: AppMarket[] = []
 
         // Try 1: Fetch as event slug
         let res = await fetch(`https://gamma-api.polymarket.com/events?slug=${slug}`)
@@ -128,6 +127,50 @@ export default function MarketPage({ params }: { params: Promise<{ slug: string 
     load()
   }, [slug])
 
+  // Poll orderbook and midpoint in the background for real-time updates
+  useEffect(() => {
+    const tokenId = market?.clobTokenIds?.[0]
+    if (!tokenId || tokenId.startsWith('mock-')) return
+
+    let active = true
+    const pollPriceAndBook = async () => {
+      try {
+        const [obRes, midRes] = await Promise.all([
+          fetch(`https://clob.polymarket.com/book?token_id=${tokenId}`),
+          fetch(`https://clob.polymarket.com/midpoint?token_id=${tokenId}`)
+        ])
+
+        if (!active) return
+
+        if (obRes.ok) {
+          const ob = await obRes.json()
+          setOrderbook({ bids: ob.bids || [], asks: ob.asks || [] })
+        }
+
+        if (midRes.ok) {
+          const midData = await midRes.json()
+          if (midData.mid) {
+            const liveProb = parseFloat(midData.mid) * 100
+            setMarket(prev => prev ? { ...prev, probability: liveProb } : null)
+          }
+        }
+      } catch (e) {
+        console.error("Error polling orderbook and midpoint:", e)
+      }
+    }
+
+    const interval = setInterval(pollPriceAndBook, 4000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [market?.clobTokenIds])
+
+  const prob = market ? Math.round(market.probability) : 50
+  const trend = market ? market.trendDirection : 0
+  const price = market ? (side === 'YES' ? market.probability / 100 : (100 - market.probability) / 100) : 0.5
+  const shares = amount / price
+
   const handleBuy = async () => {
     if (!isConnected) { connect(); return }
     if (!market) return
@@ -137,15 +180,43 @@ export default function MarketPage({ params }: { params: Promise<{ slug: string 
 
     const pid = toast({ type: 'pending', title: 'Sign in wallet', duration: 0 })
     try {
-      const { buy } = await import('@/lib/trade-executor')
+      const { buy, clearCache } = await import('@/lib/trade-executor')
       const { getWalletClientFromPrivy } = await import('@/lib/get-wallet-client')
       
       const wc = await getWalletClientFromPrivy(null)
       if (!wc) throw new Error('Wallet disconnected')
       update(pid, { title: 'Placing order...' })
-      const result = await buy(wc, tokenId, amount, market.negRisk)
+      let result = await buy(wc, tokenId, amount, market.negRisk)
+
+      // Handle onboarding if needed
+      if (!result.success && (result.error === 'NEEDS_ONBOARDING' || result.error === 'NEEDS_APPROVALS')) {
+        update(pid, { title: 'Setting up trading account...' })
+        const { enableTrading } = await import('@/lib/onboarding')
+        const onboardResult = await enableTrading(wc, {
+          onStatusChange: (_s, msg) => update(pid, { title: msg }),
+        })
+        if (!onboardResult.success) {
+          update(pid, { type: 'error', title: 'Setup failed', message: onboardResult.error, duration: 5000 }); setBuying(false); return
+        }
+        clearCache()
+        update(pid, { title: 'Placing order...' })
+        result = await buy(wc, tokenId, amount, market.negRisk)
+      }
+
       if (!result.success) { update(pid, { type: 'error', title: 'Failed', message: result.error, duration: 5000 }); setBuying(false); return }
       update(pid, { type: 'success', title: 'Done!', message: `Bought ${side} for $${amount}`, duration: 4000 })
+      if (address) {
+        import('@/lib/supabase').then(({ logActivity }) => {
+          logActivity(address, {
+            type: 'buy',
+            market_id: market.id,
+            question: market.question,
+            amount: amount,
+            side: side,
+            price: price
+          })
+        }).catch(() => {})
+      }
       try { navigator.vibrate?.(20) } catch {}
     } catch (e: any) {
       update(pid, { type: 'error', title: 'Failed', message: e.message, duration: 5000 })
@@ -155,168 +226,188 @@ export default function MarketPage({ params }: { params: Promise<{ slug: string 
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="w-5 h-5 border-2 border-white/10 border-t-white/50 rounded-full animate-spin" />
+      <div className="flex-1 flex items-center justify-center min-h-dvh bg-bg-primary">
+        <div className="w-6 h-6 border-2 border-brand/20 border-t-brand rounded-full animate-spin" />
       </div>
     )
   }
 
   if (!market) {
     return (
-      <div className="flex-1 flex items-center justify-center px-8 text-center">
+      <div className="flex-1 flex items-center justify-center px-8 text-center min-h-dvh bg-bg-primary">
         <div>
-          <p className="text-white/40 mb-4">Market not found</p>
-          <button onClick={() => router.back()} className="text-sm text-white/60 underline">Go back</button>
+          <p className="text-text-tertiary mb-4 font-semibold">Market not found</p>
+          <button onClick={() => router.back()} className="text-sm text-brand underline font-medium">Go back</button>
         </div>
       </div>
     )
   }
 
-  const prob = Math.round(market.probability)
-  const trend = market.trendDirection
-  const price = side === 'YES' ? market.probability / 100 : (100 - market.probability) / 100
-  const shares = amount / price
-
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col min-h-full pb-24">
-      {/* Header image */}
-      <div className="relative h-48 overflow-hidden">
-        {market.image && <img src={market.image} alt="" className="w-full h-full object-cover opacity-60" />}
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
-        <button onClick={() => router.back()} className="absolute top-4 left-4 w-9 h-9 rounded-full glass flex items-center justify-center z-10">
-          <ArrowLeft size={16} className="text-white" />
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col min-h-dvh bg-bg-primary pt-safe-top pb-24 overflow-x-hidden">
+      {/* Header */}
+      <header className="px-5 pt-4 pb-4 sticky top-0 z-40 liquid-glass rounded-b-[24px] shadow-sm mb-4 flex items-center justify-between">
+        <button onClick={() => router.back()} className="w-10 h-10 rounded-full border border-white/[0.04] bg-surface-elevated flex items-center justify-center active:scale-95 transition-all hover:bg-white/5">
+          <ArrowLeft size={16} className="text-text-primary" />
         </button>
+        <div className="flex-1 text-center mx-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Market Intelligence</p>
+        </div>
         <a href={`https://polymarket.com/event/${market.eventSlug}`} target="_blank" rel="noopener noreferrer"
-          className="absolute top-4 right-4 w-9 h-9 rounded-full glass flex items-center justify-center z-10">
-          <ExternalLink size={14} className="text-white/60" />
+          className="w-10 h-10 rounded-full border border-white/[0.04] bg-surface-elevated flex items-center justify-center active:scale-95 transition-all hover:bg-white/5">
+          <ExternalLink size={14} className="text-text-secondary" />
         </a>
-        <div className="absolute bottom-4 left-5 right-5">
-          <span className="px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/5 text-[9px] font-bold uppercase tracking-widest text-white/80">{market.category}</span>
+      </header>
+
+      {/* Category + Title */}
+      <div className="px-5">
+        <span className="inline-block px-2.5 py-1 rounded-full bg-brand/10 border border-brand/20 text-[9px] font-bold uppercase tracking-widest text-brand mb-3">
+          {market.category}
+        </span>
+        <h1 className="text-xl font-bold font-display leading-tight tracking-tight text-text-primary mb-4">
+          {market.question}
+        </h1>
+      </div>
+
+      {/* Header nested image */}
+      {market.image && (
+        <div className="px-5 mb-5">
+          <div className="relative h-44 w-full rounded-[32px] overflow-hidden border border-white/[0.04] shadow-sm">
+            <img src={market.image} alt="" className="w-full h-full object-cover opacity-65" />
+            <div className="absolute inset-0 bg-gradient-to-t from-bg-primary via-transparent to-transparent" />
+          </div>
+        </div>
+      )}
+
+      {/* Price + Stats Grid */}
+      <div className="px-5 grid grid-cols-2 gap-4 mb-6">
+        <div className="bg-surface-elevated rounded-[24px] p-5 border border-transparent hover:border-white/[0.02] transition-all shadow-sm">
+          <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-text-tertiary mb-2">YES Price</p>
+          <div className="flex items-baseline gap-1">
+            <span className="text-4xl font-bold font-display tabular-nums tracking-tighter text-text-primary">{prob}</span>
+            <span className="text-sm font-semibold text-text-tertiary font-display">¢</span>
+          </div>
+        </div>
+        <div className="bg-surface-elevated rounded-[24px] p-5 border border-transparent hover:border-white/[0.02] transition-all shadow-sm flex flex-col justify-between">
+          <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-text-tertiary mb-2">Market Stats</p>
+          <div className="space-y-1 font-semibold text-[10px] text-text-secondary uppercase">
+            {trend !== 0 && (
+              <div className={`flex items-center gap-1 font-bold ${trend > 0 ? 'text-positive' : 'text-negative'}`}>
+                {trend > 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                {trend > 0 ? '+' : ''}{trend.toFixed(1)}% 24h
+              </div>
+            )}
+            <div className="flex items-center gap-1 font-mono">${formatNumber(market.volume)} Vol</div>
+            <div className="flex items-center gap-1">{timeRemaining(market.endDate)}</div>
+          </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="px-5 pt-5 space-y-5">
-        {/* Question */}
-        <h1 className="text-xl font-bold font-[family-name:var(--font-display)] leading-tight tracking-tight text-white">{market.question}</h1>
-
-        {/* Price + stats */}
-        <div className="flex items-end justify-between">
-          <div>
-            <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/30 mb-1">Yes Price</p>
-            <div className="flex items-baseline gap-1">
-              <span className="text-5xl font-bold font-[family-name:var(--font-display)] tabular-nums tracking-tighter bg-gradient-to-b from-white to-white/70 bg-clip-text text-transparent">{prob}</span>
-              <span className="text-lg text-white/30 font-[family-name:var(--font-display)]">¢</span>
-            </div>
-          </div>
-          <div className="flex flex-col items-end gap-1 text-[10px] text-white/30">
-            {trend !== 0 && (
-              <span className={`flex items-center gap-0.5 font-bold ${trend > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {trend > 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {trend > 0 ? '+' : ''}{trend.toFixed(1)}%
-              </span>
-            )}
-            <span className="flex items-center gap-1"><BarChart3 size={10} />${formatNumber(market.volume)} vol</span>
-            <span className="flex items-center gap-1"><Clock size={10} />{timeRemaining(market.endDate)}</span>
-          </div>
+      {/* Progress bar */}
+      <div className="px-5 mb-6">
+        <div className="w-full h-2 bg-surface-elevated rounded-full overflow-hidden border border-white/[0.02]">
+          <div className="h-full bg-brand rounded-full shadow-[0_0_12px_rgba(183,255,0,0.4)] transition-all duration-500" style={{ width: `${prob}%` }} />
         </div>
+      </div>
 
-        {/* Progress bar */}
-        <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
-          <div className="h-full bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.5)]" style={{ width: `${prob}%` }} />
-        </div>
-
-        {/* Sub-markets (if multi-outcome) */}
-        {subMarkets.length > 1 && (
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-white/30 mb-2">All outcomes</p>
-            <div className="space-y-1.5">
-              {subMarkets.map((sm) => (
-                <div key={sm.id} className="flex items-center justify-between glass-dark premium-border rounded-xl px-3.5 py-2.5">
-                  <p className="text-[11px] font-medium text-white/80 flex-1 line-clamp-1 pr-3">{sm.question}</p>
-                  <span className="text-[13px] font-bold font-[family-name:var(--font-display)] text-white">{Math.round(sm.probability)}¢</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Orderbook */}
-        {orderbook && (orderbook.bids.length > 0 || orderbook.asks.length > 0) && (
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-white/30 mb-2">Orderbook</p>
-            <div className="grid grid-cols-2 gap-2">
-              {/* Bids */}
-              <div className="glass-dark premium-border rounded-xl p-3">
-                <p className="text-[9px] font-bold uppercase tracking-widest text-emerald-400/70 mb-2">Bids</p>
-                <div className="space-y-1">
-                  {orderbook.bids.slice(0, 5).map((b: any, i: number) => (
-                    <div key={i} className="flex justify-between text-[10px]">
-                      <span className="text-emerald-400/80 font-bold">{(parseFloat(b.price) * 100).toFixed(0)}¢</span>
-                      <span className="text-white/30">{parseFloat(b.size).toFixed(0)}</span>
-                    </div>
-                  ))}
-                </div>
+      {/* Sub-markets */}
+      {subMarkets.length > 1 && (
+        <div className="px-5 mb-6">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-3">All outcomes</p>
+          <div className="bg-surface-elevated rounded-[32px] p-5 border border-transparent hover:border-white/[0.04] transition-all space-y-3 shadow-sm">
+            {subMarkets.map((sm) => (
+              <div key={sm.id} className="flex items-center justify-between py-2 border-b border-white/[0.04] last:border-0 last:pb-0 first:pt-0">
+                <p className="text-[12px] font-bold text-text-primary flex-1 line-clamp-1 pr-4">{sm.question}</p>
+                <span className="text-[13px] font-bold font-display text-brand font-mono">{Math.round(sm.probability)}¢</span>
               </div>
-              {/* Asks */}
-              <div className="glass-dark premium-border rounded-xl p-3">
-                <p className="text-[9px] font-bold uppercase tracking-widest text-rose-400/70 mb-2">Asks</p>
-                <div className="space-y-1">
-                  {orderbook.asks.slice(0, 5).map((a: any, i: number) => (
-                    <div key={i} className="flex justify-between text-[10px]">
-                      <span className="text-rose-400/80 font-bold">{(parseFloat(a.price) * 100).toFixed(0)}¢</span>
-                      <span className="text-white/30">{parseFloat(a.size).toFixed(0)}</span>
-                    </div>
-                  ))}
-                </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Orderbook */}
+      {orderbook && (orderbook.bids.length > 0 || orderbook.asks.length > 0) && (
+        <div className="px-5 mb-6">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-3">Orderbook</p>
+          <div className="grid grid-cols-2 gap-4">
+            {/* Bids */}
+            <div className="bg-surface-elevated rounded-[24px] p-4 border border-transparent shadow-sm">
+              <p className="text-[9px] font-bold uppercase tracking-widest text-positive mb-3">Bids (Buy)</p>
+              <div className="space-y-1.5">
+                {orderbook.bids.slice(0, 5).map((b: any, i: number) => (
+                  <div key={i} className="flex justify-between text-[11px] font-mono">
+                    <span className="text-positive font-bold">{(parseFloat(b.price) * 100).toFixed(0)}¢</span>
+                    <span className="text-text-tertiary">{parseFloat(b.size).toFixed(0)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Asks */}
+            <div className="bg-surface-elevated rounded-[24px] p-4 border border-transparent shadow-sm">
+              <p className="text-[9px] font-bold uppercase tracking-widest text-negative mb-3">Asks (Sell)</p>
+              <div className="space-y-1.5">
+                {orderbook.asks.slice(0, 5).map((a: any, i: number) => (
+                  <div key={i} className="flex justify-between text-[11px] font-mono">
+                    <span className="text-negative font-bold">{(parseFloat(a.price) * 100).toFixed(0)}¢</span>
+                    <span className="text-text-tertiary">{parseFloat(a.size).toFixed(0)}</span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Trade panel */}
-        <div className="glass-dark premium-border rounded-3xl p-5">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-white/30 mb-3">Trade</p>
+      {/* Trade panel */}
+      <div className="px-5 mb-6">
+        <div className="bg-surface-elevated rounded-[32px] p-6 border border-transparent shadow-md">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-4">Execute Trade</p>
 
           {/* Side pills */}
-          <div className="flex gap-2 mb-4">
+          <div className="flex gap-3 mb-5">
             <button onClick={() => setSide('YES')}
-              className={`flex-1 py-3 rounded-2xl text-sm font-bold transition-all ${
-                side === 'YES' ? 'bg-emerald-500/15 border-2 border-emerald-500/40 text-emerald-400' : 'glass border border-white/5 text-white/30'
+              className={`flex-1 py-4 rounded-[20px] text-[15px] font-bold transition-all ${
+                side === 'YES' ? 'bg-brand/10 border-2 border-brand/50 text-brand' : 'bg-surface border border-white/[0.04] text-text-secondary'
               }`}>Yes {prob}¢</button>
             <button onClick={() => setSide('NO')}
-              className={`flex-1 py-3 rounded-2xl text-sm font-bold transition-all ${
-                side === 'NO' ? 'bg-rose-500/15 border-2 border-rose-500/40 text-rose-400' : 'glass border border-white/5 text-white/30'
+              className={`flex-1 py-4 rounded-[20px] text-[15px] font-bold transition-all ${
+                side === 'NO' ? 'bg-white/10 border-2 border-white/30 text-white' : 'bg-surface border border-white/[0.04] text-text-secondary'
               }`}>No {100 - prob}¢</button>
           </div>
 
           {/* Amount pills */}
-          <div className="flex gap-1.5 mb-3">
-            {[5, 10, 25, 50, 100].map(a => (
+          <div className="flex gap-2 mb-4">
+            {[10, 50, 100, 500].map(a => (
               <button key={a} onClick={() => setAmount(a)}
-                className={`flex-1 py-2 rounded-xl text-[11px] font-bold transition-all ${
-                  amount === a ? 'bg-white/10 border border-white/20 text-white' : 'glass border-white/5 text-white/30'
+                className={`flex-1 py-3 rounded-2xl text-[13px] font-bold transition-all ${
+                  amount === a ? 'bg-white/10 text-white' : 'bg-surface text-text-tertiary'
                 }`}>${a}</button>
             ))}
           </div>
 
-          {/* Custom */}
-          <div className="relative mb-4">
-            <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/30 text-sm font-bold">$</span>
+          {/* Custom Input */}
+          <div className="relative mb-5">
+            <span className="absolute left-5 top-1/2 -translate-y-1/2 text-text-tertiary text-lg font-bold">$</span>
             <input type="number" value={amount} onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && v >= 0) setAmount(v) }}
-              min={1} className="w-full bg-white/[0.03] border border-white/[0.08] rounded-2xl pl-8 pr-4 py-3 text-sm text-white font-bold focus:outline-none focus:border-white/20 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+              min={1} className="w-full bg-surface rounded-[20px] pl-10 pr-5 py-4 text-lg text-text-primary font-bold focus:outline-none focus:ring-2 focus:ring-brand/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-shadow" />
           </div>
 
           {/* Summary */}
-          <div className="flex justify-between text-[11px] mb-4 px-1">
-            <span className="text-white/30">Shares: <span className="text-white font-bold">{shares.toFixed(1)}</span></span>
-            <span className="text-white/30">Payout: <span className="text-emerald-400 font-bold">${shares.toFixed(2)}</span></span>
+          <div className="bg-surface rounded-[20px] p-5 mb-6 space-y-3">
+            <div className="flex justify-between text-[13px] font-medium">
+              <span className="text-text-tertiary">Shares</span>
+              <span className="text-text-primary font-mono">{shares.toFixed(1)}</span>
+            </div>
+            <div className="flex justify-between text-[13px] font-bold">
+              <span className="text-text-tertiary">Payout if correct</span>
+              <span className="text-positive font-mono">${shares.toFixed(2)}</span>
+            </div>
           </div>
 
-          {/* Buy button */}
+          {/* Buy Button */}
           <motion.button whileTap={{ scale: 0.97 }} onClick={handleBuy} disabled={buying || amount <= 0}
-            className="w-full py-4 bg-white text-black rounded-2xl text-sm font-bold font-[family-name:var(--font-display)] uppercase tracking-widest disabled:opacity-40 shadow-[0_10px_25px_rgba(255,255,255,0.1)]">
-            {buying ? 'Placing...' : isConnected ? `Buy ${side} — $${amount}` : 'Connect to trade'}
+            className="w-full py-5 bg-brand text-black rounded-[24px] text-[15px] font-bold uppercase tracking-wider disabled:opacity-40 shadow-[0_4px_24px_rgba(183,255,0,0.25)] active:scale-[0.98] transition-all">
+            {buying ? 'Executing...' : isConnected ? `Confirm Trade — $${amount}` : 'Connect Wallet'}
           </motion.button>
         </div>
       </div>

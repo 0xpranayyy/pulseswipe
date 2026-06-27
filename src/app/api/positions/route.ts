@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server'
  * GET /api/positions?address=0x...&type=positions|history|value|closed|profile
  * 
  * Fetches user data from Polymarket Data API + Gamma API.
+ * All data is real — pulled directly from Polymarket's on-chain indexed APIs.
  * Auto-resolves EOA → proxy wallet if needed.
  */
 
@@ -27,7 +28,6 @@ export async function GET(request: NextRequest) {
 
   if (!address) return Response.json({ error: 'address required' }, { status: 400 })
 
-  // Get proxy wallet (or use EOA if no proxy exists)
   const userAddr = await getProxyWallet(address)
 
   try {
@@ -68,7 +68,6 @@ export async function GET(request: NextRequest) {
         })
         if (!r.ok) throw new Error(`Data API ${r.status}`)
         const valueData = await r.json()
-        // API returns array — take first
         const total = Array.isArray(valueData) && valueData[0] ? valueData[0].value || 0 : 0
         return Response.json({ value: total, proxyWallet: userAddr })
       }

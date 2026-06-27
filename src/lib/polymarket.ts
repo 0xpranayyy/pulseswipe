@@ -82,36 +82,6 @@ const GAMMA_API = 'https://gamma-api.polymarket.com'
 const CLOB_API = 'https://clob.polymarket.com'
 
 /**
- * Fetch active, tradeable markets from Gamma API
- * Sorted by 24h volume (most active first)
- */
-export async function fetchActiveMarkets(params: {
-  limit?: number
-  offset?: number
-  order?: string
-}): Promise<GammaMarket[]> {
-  const searchParams = new URLSearchParams({
-    active: 'true',
-    closed: 'false',
-    limit: String(params.limit ?? 50),
-    offset: String(params.offset ?? 0),
-    order: params.order ?? 'volume_24hr',
-    ascending: 'false',
-  })
-
-  const res = await fetch(`${GAMMA_API}/markets?${searchParams}`, {
-    next: { revalidate: 30 },
-  })
-
-  if (!res.ok) {
-    console.error(`Gamma API error: ${res.status}`)
-    return []
-  }
-
-  return res.json()
-}
-
-/**
  * Fetch active events (includes markets with correct event slugs)
  * This is the preferred method — gives us the event slug for proper Polymarket URLs
  */
@@ -142,47 +112,6 @@ export async function fetchActiveEvents(params: {
 }
 
 /**
- * Fetch markets by tag/category
- */
-export async function fetchMarketsByTag(tagId: string, limit = 30): Promise<GammaMarket[]> {
-  const res = await fetch(
-    `${GAMMA_API}/markets?tag_id=${tagId}&active=true&closed=false&limit=${limit}&order=volume_24hr&ascending=false`,
-    { next: { revalidate: 60 } }
-  )
-  if (!res.ok) return []
-  return res.json()
-}
-
-/**
- * Fetch available tags
- */
-export async function fetchTags(): Promise<Array<{ id: string; label: string; slug: string }>> {
-  const res = await fetch(`${GAMMA_API}/tags`, { next: { revalidate: 300 } })
-  if (!res.ok) return []
-  return res.json()
-}
-
-// ============================================================
-// CLOB API — Live Prices & History
-// ============================================================
-
-/**
- * Get midpoint price for a token (average of best bid/ask)
- */
-export async function getMidpoint(tokenId: string): Promise<number | null> {
-  try {
-    const res = await fetch(`${CLOB_API}/midpoint?token_id=${tokenId}`, {
-      next: { revalidate: 10 },
-    })
-    if (!res.ok) return null
-    const data = await res.json()
-    return data.mid ? parseFloat(data.mid) : null
-  } catch {
-    return null
-  }
-}
-
-/**
  * Get price history for sparkline charts
  */
 export async function getPriceHistory(
@@ -200,21 +129,6 @@ export async function getPriceHistory(
     return data.history ?? []
   } catch {
     return []
-  }
-}
-
-/**
- * Get order book for a token
- */
-export async function getOrderBook(tokenId: string) {
-  try {
-    const res = await fetch(`${CLOB_API}/book?token_id=${tokenId}`, {
-      next: { revalidate: 10 },
-    })
-    if (!res.ok) return null
-    return res.json()
-  } catch {
-    return null
   }
 }
 
@@ -270,7 +184,7 @@ export function transformMarket(raw: GammaMarket, eventSlug?: string): AppMarket
  */
 export async function enrichWithHistory(market: AppMarket): Promise<AppMarket> {
   const tokenId = market.clobTokenIds[0]
-  if (!tokenId) return market
+  if (!tokenId || tokenId.startsWith('mock-')) return market
 
   const history = await getPriceHistory(tokenId, '1w', 20)
   if (history.length < 2) return market
